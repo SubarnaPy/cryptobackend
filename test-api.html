@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Test API</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 20px;
+            padding: 20px;
+            background-color: #f4f4f4;
+        }
+        h1 {
+            color: #333;
+        }
+        pre {
+            background-color: #fff;
+            border: 1px solid #ccc;
+            padding: 10px;
+            overflow-x: auto;
+        }
+    </style>
+</head>
+<body>
+    <h1>Test API</h1>
+    <p>This page is used to test API responses.</p>
+    <h2>API Response</h2>
+    <pre id="api-response"></pre>
+
+    <script>
+        async function fetchApiResponse() {
+            try {
+                const response = await fetch('/api/test'); // Adjust the endpoint as necessary
+                const data = await response.json();
+                document.getElementById('api-response').textContent = JSON.stringify(data, null, 2);
+            } catch (error) {
+                document.getElementById('api-response').textContent = 'Error fetching API response: ' + error.message;
+            }
+        }
+
+        fetchApiResponse();
+    </script>
+</body>
+</html>
