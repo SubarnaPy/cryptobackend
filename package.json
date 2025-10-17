@@ -22,7 +22,7 @@
     "express": "^4.21.2",
     "jsonwebtoken": "^9.0.2",
     "mongoose": "^5.13.23",
-    "nodemailer": "^6.9.16",
+    "nodemailer": "^7.0.0",
     "stripe": "^8.222.0"
   },
   "devDependencies": {
