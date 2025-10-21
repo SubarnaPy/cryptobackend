@@ -12,11 +12,20 @@ const JWT_SECRET = process.env.JWT_SECRET || 'your-secret-key-change-in-producti
 // In-memory OTP storage (use Redis in production)
 const otpStore = new Map();
 
-// Configure SendGrid
-sgMail.setApiKey(process.env.SENDGRID_API_KEY);
+// Configure SendGrid (only if API key is available)
+if (process.env.SENDGRID_API_KEY) {
+  sgMail.setApiKey(process.env.SENDGRID_API_KEY);
+} else {
+  console.warn('⚠️  SENDGRID_API_KEY not set - email OTP will be logged to console only');
+}
 
-// Configure Twilio
-const twilioClient = twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN);
+// Configure Twilio (only if credentials are available)
+let twilioClient = null;
+if (process.env.TWILIO_ACCOUNT_SID && process.env.TWILIO_AUTH_TOKEN) {
+  twilioClient = twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN);
+} else {
+  console.warn('⚠️  TWILIO credentials not set - SMS OTP will not be available');
+}
 
 // Generate OTP
 function generateOTP() {
@@ -26,12 +35,12 @@ function generateOTP() {
 // Send OTP via email
 async function sendOTPEmail(email, otp) {
   try {
-    // For development: Log OTP to console
-    console.log(`🔑 DEVELOPMENT OTP for ${email}: ${otp}`);
-    console.log('📧 In production, this would be sent via SendGrid');
+    console.log('🔑 OTP for', email, ':', otp);
+    console.log('Sending email...');
+    console.log('To:', email);
+    console.log('From:', process.env.SENDGRID_FROM_EMAIL);
+    console.log('API Key set:', !!process.env.SENDGRID_API_KEY);
 
-    // Uncomment below for production email sending
-    /*
     const msg = {
       to: email,
       from: process.env.SENDGRID_FROM_EMAIL,
@@ -49,16 +58,25 @@ async function sendOTPEmail(email, otp) {
       `,
     };
 
-    await sgMail.send(msg);
-    */
+    const info = await sgMail.send(msg);
+    console.log('📧 Email sent successfully to', email);
+    return info;
   } catch (error) {
-    console.error('❌ Email sending error:', error);
-    // Don't throw error in development - just log it
+    console.error('SendGrid Error Details:', error.response?.body || error);
+    console.error('Error message:', error.message);
+    console.error('Error code:', error.code);
+    throw error;
   }
 }
 
 // Send OTP via SMS
 async function sendOTPSMS(phone, otp) {
+  if (!twilioClient) {
+    console.log(`📱 DEVELOPMENT SMS OTP for ${phone}: ${otp}`);
+    console.log('💬 In production, this would be sent via Twilio');
+    return;
+  }
+
   await twilioClient.messages.create({
     body: `Your Canadian Nexus OTP: ${otp}. Valid for 10 minutes.`,
     from: process.env.TWILIO_PHONE_NUMBER,
