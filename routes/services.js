@@ -8,7 +8,7 @@ const Review = require('../models/Review');
 // @access  Public
 router.get('/', async (req, res) => {
   try {
-    const services = await Service.find().sort({ serviceId: 1 });
+    const services = await Service.find().sort({ createdAt: -1 });
     res.json(services);
   } catch (error) {
     console.error('Error fetching services:', error);
@@ -38,7 +38,7 @@ router.get('/all/reviews', async (req, res) => {
 // NOTE: This route MUST be before /:id to avoid matching "category" as an ID
 router.get('/category/:category', async (req, res) => {
   try {
-    const services = await Service.find({ category: req.params.category }).sort({ serviceId: 1 });
+    const services = await Service.find({ category: req.params.category }).sort({ createdAt: -1 });
     res.json(services);
   } catch (error) {
     console.error('Error fetching services by category:', error);
@@ -65,7 +65,7 @@ router.get('/:id/reviews', async (req, res) => {
 // NOTE: This route should be LAST among GET routes to avoid matching specific paths
 router.get('/:id', async (req, res) => {
   try {
-    const service = await Service.findOne({ serviceId: req.params.id });
+    const service = await Service.findById(req.params.id);
     
     if (!service) {
       return res.status(404).json({ message: 'Service not found' });

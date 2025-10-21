@@ -124,7 +124,10 @@ router.post('/', optionalAuth, async (req, res) => {
 router.get('/', auth, async (req, res) => {
   try {
     const consultations = await Consultation.find({
-      userId: req.user._id
+      $or: [
+        { userId: req.user._id },
+        { email: req.user.email }
+      ]
     })
     .sort({ createdAt: -1 })
     .populate('assignedConsultant', 'firstName lastName email')

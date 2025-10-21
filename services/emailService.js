@@ -1,49 +1,30 @@
-const nodemailer = require('nodemailer');
+const sgMail = require('@sendgrid/mail');
+sgMail.setApiKey(process.env.SENDGRID_API_KEY);
 
 const sendMail = async (email, subject, htmlTemplate) => {
   try {
-    // Debugging logs for environment variables
-    console.log('SMTP_USERNAME:', process.env.SMTP_USERNAME);
-    console.log('SMTP_PASSWORD:', process.env.SMTP_PASSWORD ? '****' : 'Not Set');
-    console.log('SMTP_HOST:', process.env.SMTP_HOST);
-    console.log('SMTP_PORT:', process.env.SMTP_PORT);
-
     console.log('Sending email...');
     console.log('To:', email);
     console.log('Subject:', subject);
-    console.log('HTML Template:', htmlTemplate);
+    console.log('From:', process.env.SENDGRID_FROM_EMAIL);
+    console.log('API Key set:', !!process.env.SENDGRID_API_KEY);
 
-    // Create a transporter using SMTP
-    
-const transporter = nodemailer.createTransport({
-  service: "gmail",
-  auth: {
-    type: "OAuth2",
-    user: process.env.GMAIL_USER,
-    clientId: process.env.GMAIL_CLIENT_ID,
-    clientSecret: process.env.GMAIL_CLIENT_SECRET,
-    refreshToken: process.env.GMAIL_REFRESH_TOKEN,
-  },
-});
-
-
-    // Send the email
-    let info = await transporter.sendMail({
-      from: process.env.SMTP_FROM_EMAIL || process.env.SMTP_USERNAME,
+    const msg = {
       to: email,
+      from: process.env.SENDGRID_FROM_EMAIL,
       subject: subject,
       html: htmlTemplate,
-    });
+    };
 
-    console.log('Email sent:', info);
-    return info; // Return the sent email info for further use, like tracking the email ID or other details
+    const info = await sgMail.send(msg);
+    console.log('Email sent successfully');
+    return info;
 
   } catch (error) {
-    // Log detailed error information
-    console.error('Error sending email:', error);
+    console.error('SendGrid Error Details:', error.response?.body || error);
     console.error('Error message:', error.message);
-    console.error('Error stack:', error.stack);
-    throw new Error('Failed to send email'); // Re-throw the error for the asyncHandler middleware to catch and return to the client
+    console.error('Error code:', error.code);
+    throw error;
   }
 };
 
@@ -74,7 +55,7 @@ exports.sendConsultationReply = async ({ to, name, consultationType, meetingLink
       <p>Please join the meeting at the scheduled time using the link provided above.</p>
       <p>If you have any questions, feel free to reply to this email.</p>
 
-      <p>Best regards,<br>Canadian Nexus Team</p>
+      <p>Best regards,<br>ConnectCanada.io Team</p>
     </div>
   `;
 

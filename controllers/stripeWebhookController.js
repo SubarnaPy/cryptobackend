@@ -67,6 +67,9 @@ exports.handleStripeWebhook = async (req, res) => {
 
         console.log('✅ Checkout session completed:', sessionId);
 
+        const Payment = require('../models/Payment');
+        const Purchase = require('../models/Purchase');
+        
         const payment = await Payment.findOne({ stripeCheckoutSessionId: sessionId });
         if (!payment) {
           console.warn(`No payment found for checkout session: ${sessionId}`);
@@ -76,9 +79,24 @@ exports.handleStripeWebhook = async (req, res) => {
         payment.stripePaymentIntentId = paymentIntentId;
         payment.status = 'completed';
         payment.updatedAt = new Date();
-
         await payment.save();
         console.log(`Updated payment ${payment._id} to completed status`);
+
+        // Create Purchase records for cart items
+        if (payment.serviceDetails?.items) {
+          for (const item of payment.serviceDetails.items) {
+            const purchase = new Purchase({
+              userId: payment.userId,
+              itemType: item.itemType,
+              itemId: item.itemId,
+              paymentId: payment._id,
+              price: item.price || 0,
+              quantity: item.quantity || 1
+            });
+            await purchase.save();
+            console.log(`Created purchase record for ${item.itemType} ${item.itemId}`);
+          }
+        }
         break;
       }
 

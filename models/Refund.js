@@ -12,8 +12,9 @@ const refundSchema = new mongoose.Schema({
     required: true,
   },
   serviceId: {
-    type: Number,
-    required: true,
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Service',
+    required: false,
   },
   refundReason: {
     type: String,

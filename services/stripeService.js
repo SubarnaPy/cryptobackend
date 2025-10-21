@@ -1,30 +1,23 @@
 const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY || 'sk_test_...');
 
-// ✅ CORRECTED Webhook Validation
 const validateWebhook = (req) => {
   const endpointSecret = process.env.STRIPE_WEBHOOK_ENDPOINT_SECRET;
+  const sig = req.get('stripe-signature');
 
-  // If no endpoint secret configured, skip validation for development
-  if (!endpointSecret) {
-    console.warn('STRIPE_WEBHOOK_ENDPOINT_SECRET not configured. Skipping signature validation for development.');
+  // If no signature header or endpoint secret, skip validation for development
+  if (!endpointSecret || !sig) {
+    console.warn('Development mode: Skipping signature validation');
     try {
-      // For development, parse the raw body buffer as a JSON string
       return JSON.parse(req.body.toString('utf8'));
     } catch (e) {
-      console.error('Failed to parse webhook body in dev mode:', e);
+      console.error('Failed to parse webhook body:', e);
       throw new Error('Invalid JSON in webhook body');
     }
   }
 
-  // In production, verify the signature
+  // Production: verify signature
   try {
-    const sig = req.get('stripe-signature');
-    if (!sig) {
-      throw new Error('No stripe-signature header found');
-    }
-    // The constructEvent method expects the raw request body (Buffer)
-    const event = stripe.webhooks.constructEvent(req.body, sig, endpointSecret);
-    return event;
+    return stripe.webhooks.constructEvent(req.body, sig, endpointSecret);
   } catch (err) {
     console.error('Webhook signature verification failed:', err.message);
     throw new Error(`Webhook signature verification failed: ${err.message}`);
@@ -41,6 +34,7 @@ const createCheckoutSession = async (sessionData) => {
       amount,
       currency,
       serviceDetails,
+      lineItems,
       customerEmail,
       successUrl,
       cancelUrl,
@@ -49,7 +43,7 @@ const createCheckoutSession = async (sessionData) => {
 
     const sessionConfig = {
       payment_method_types: ['card'],
-      line_items: [
+      line_items: lineItems || [
         {
           price_data: {
             currency: currency,
@@ -57,7 +51,7 @@ const createCheckoutSession = async (sessionData) => {
               name: serviceDetails.title,
               description: `Category: ${serviceDetails.category} | Consultant: ${serviceDetails.consultant} | Duration: ${serviceDetails.duration}`,
             },
-            unit_amount: amount, // Amount in cents
+            unit_amount: amount,
           },
           quantity: 1,
         },

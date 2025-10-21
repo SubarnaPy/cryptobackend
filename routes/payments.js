@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const jwt = require('jsonwebtoken');
+const mongoose = require('mongoose');
 const Payment = require('../models/Payment');
 const Service = require('../models/Service');
 const { createCheckoutSession, createRefund } = require('../services/stripeService');
@@ -30,14 +31,11 @@ router.get('/my-payments', verifyToken, async (req, res) => {
     console.log('Looking for payments for user:', req.user._id);
     console.log('User object:', { id: req.user._id, email: req.user.email });
     
-    // First check how many total payments exist
-    const totalPayments = await Payment.countDocuments();
-    console.log('Total payments in database:', totalPayments);
-    
-    // Try to find payments for this user
+    // Only show service bookings (not product purchases)
     const payments = await Payment.find({ 
       userId: req.user._id,
-      status: { $in: ['succeeded', 'processing', 'refunded'] }
+      status: { $in: ['succeeded', 'processing', 'refunded'] },
+      serviceId: { $ne: null } // Only payments with actual serviceId (not cart purchases)
     })
       .sort({ createdAt: -1 })
       .populate('userId', 'firstName lastName email');
@@ -198,16 +196,26 @@ router.post('/create-checkout-session', verifyToken, async (req, res) => {
     }
 
     console.log('Step 2: Looking up service in database');
-    console.log('- Searching for serviceId:', serviceId);
+    console.log('- Searching for _id:', serviceId);
 
-    // Get service details
-    const service = await Service.findOne({ serviceId });
+    // Validate ObjectId format
+    if (!mongoose.Types.ObjectId.isValid(serviceId)) {
+      console.log('ERROR: Invalid ObjectId format');
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid service ID format',
+        debug: { providedId: serviceId }
+      });
+    }
+
+    // Get service details by MongoDB _id
+    const service = await Service.findById(serviceId);
     console.log('Database query result:');
     console.log('- Service found:', !!service);
 
     if (service) {
       console.log('- Service details:', {
-        serviceId: service.serviceId,
+        _id: service._id,
         title: service.title,
         price: service.price,
         category: service.category,
@@ -216,13 +224,13 @@ router.post('/create-checkout-session', verifyToken, async (req, res) => {
       });
     } else {
       console.log('ERROR: Service not found');
-      const allServices = await Service.find({}, 'serviceId title price');
+      const allServices = await Service.find({}, '_id title price');
       console.log('- Total services in DB:', await Service.countDocuments());
       console.log('- Available services:', JSON.stringify(allServices, null, 2));
       return res.status(404).json({
         success: false,
         message: 'Service not found',
-        debug: { searchedServiceId: serviceId, totalServices: await Service.countDocuments() }
+        debug: { searchedId: serviceId, totalServices: await Service.countDocuments() }
       });
     }
 
@@ -261,7 +269,7 @@ router.post('/create-checkout-session', verifyToken, async (req, res) => {
       amount: amountInCents,
       currency: 'usd',
       serviceDetails: {
-        serviceId: service.serviceId,
+        serviceId: service._id.toString(),
         title: service.title,
         category: service.category,
         consultant: service.consultant,
@@ -273,8 +281,8 @@ router.post('/create-checkout-session', verifyToken, async (req, res) => {
       successUrl,
       cancelUrl,
       metadata: {
-        userId: req.user._id.toString(), // Convert ObjectId to string for Stripe metadata
-        serviceId: service.serviceId,
+        userId: req.user._id.toString(),
+        serviceId: service._id.toString(),
       },
     };
     console.log('- Session data:', JSON.stringify(sessionData, null, 2));
@@ -289,10 +297,10 @@ router.post('/create-checkout-session', verifyToken, async (req, res) => {
     // Create payment record in database
     console.log('Step 6: Creating payment record in database');
     const paymentData = {
-      userId: req.user._id, // Fixed: use req.user._id instead of req.user.userId
-      serviceId: service.serviceId,
+      userId: req.user._id,
+      serviceId: service._id.toString(),
       stripeCheckoutSessionId: session.id,
-      stripePaymentIntentId: session.payment_intent, // Payment intent ID if available
+      stripePaymentIntentId: session.payment_intent,
       amount: amountInCents,
       currency: 'usd',
       paymentMethod: 'card',
@@ -380,6 +388,131 @@ router.post('/create-checkout-session', verifyToken, async (req, res) => {
         stripeErrorType: error.type,
         stripeErrorCode: error.code,
       }
+    });
+  }
+});
+
+// Create checkout session for cart items
+router.post('/create-cart-checkout', verifyToken, async (req, res) => {
+  try {
+    const { items, successUrl, cancelUrl } = req.body;
+
+    if (!items || items.length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'Cart is empty'
+      });
+    }
+
+    let totalAmount = 0;
+    const lineItems = [];
+
+    const itemsWithPrices = [];
+    
+    for (const item of items) {
+      let itemDetails;
+      if (item.itemType === 'product') {
+        itemDetails = await require('../models/Product').findById(item.itemId);
+      } else if (item.itemType === 'webinar') {
+        itemDetails = await require('../models/Webinar').findById(item.itemId);
+      }
+
+      if (!itemDetails) continue;
+
+      const price = parseFloat(itemDetails.price.toString().replace(/[^0-9.]/g, ''));
+      const amountInCents = Math.round(price * 100);
+      totalAmount += amountInCents * item.quantity;
+
+      // Store item with price for Purchase creation
+      itemsWithPrices.push({
+        ...item,
+        price: amountInCents
+      });
+
+      lineItems.push({
+        price_data: {
+          currency: 'usd',
+          product_data: {
+            name: itemDetails.title,
+            description: itemDetails.description
+          },
+          unit_amount: amountInCents
+        },
+        quantity: item.quantity
+      });
+    }
+
+    const sessionData = {
+      amount: totalAmount,
+      currency: 'usd',
+      lineItems,
+      customerEmail: req.user.email,
+      customerName: `${req.user.firstName} ${req.user.lastName}`,
+      successUrl,
+      cancelUrl,
+      metadata: {
+        userId: req.user._id.toString(),
+        cartCheckout: 'true'
+      }
+    };
+
+    const session = await createCheckoutSession(sessionData);
+
+    // Create payment record
+    const payment = new Payment({
+      userId: req.user._id,
+      serviceId: null, // Cart checkout doesn't have single serviceId
+      stripeCheckoutSessionId: session.id,
+      stripePaymentIntentId: session.payment_intent,
+      amount: totalAmount,
+      currency: 'usd',
+      paymentMethod: 'card',
+      serviceDetails: { items: itemsWithPrices, type: 'cart-checkout' },
+      customerEmail: req.user.email,
+      customerName: sessionData.customerName,
+      metadata: sessionData.metadata
+    });
+
+    await payment.save();
+
+    // Create Purchase records immediately for cart items
+    // This ensures products appear in "My Products" even if webhook fails
+    const Purchase = require('../models/Purchase');
+    const mongoose = require('mongoose');
+    
+    for (const item of itemsWithPrices) {
+      const existingPurchase = await Purchase.findOne({
+        userId: req.user._id,
+        itemId: new mongoose.Types.ObjectId(item.itemId),
+        itemType: item.itemType
+      });
+
+      if (!existingPurchase) {
+        await Purchase.create({
+          userId: req.user._id,
+          itemType: item.itemType,
+          itemId: new mongoose.Types.ObjectId(item.itemId),
+          paymentId: payment._id,
+          price: item.price || 0,
+          quantity: item.quantity || 1
+        });
+        console.log(`Created purchase record for ${item.itemType}: ${item.itemId}`);
+      }
+    }
+
+    res.json({
+      success: true,
+      data: {
+        sessionId: session.id,
+        url: session.url
+      }
+    });
+  } catch (error) {
+    console.error('Cart checkout error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to create checkout session',
+      error: error.message
     });
   }
 });

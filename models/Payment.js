@@ -7,8 +7,8 @@ const paymentSchema = new mongoose.Schema({
     required: true,
   },
   serviceId: {
-    type: Number,
-    required: true,
+    type: mongoose.Schema.Types.Mixed, // Can be ObjectId for single service or null for cart
+    required: false,
   },
   stripePaymentIntentId: {
     type: String,
@@ -38,11 +38,7 @@ const paymentSchema = new mongoose.Schema({
     required: true,
   },
   serviceDetails: {
-    title: String,
-    category: String,
-    consultant: String,
-    duration: String,
-    price: String,
+    type: mongoose.Schema.Types.Mixed, // Flexible to handle single service or cart items
   },
   customerEmail: {
     type: String,

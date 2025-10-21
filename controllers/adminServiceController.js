@@ -3,7 +3,7 @@ const Service = require('../models/Service');
 // Get all services
 exports.getAllServices = async (req, res) => {
   try {
-    const services = await Service.find().sort({ serviceId: 1 });
+    const services = await Service.find().sort({ createdAt: -1 });
     res.json({
       success: true,
       count: services.length,
@@ -21,7 +21,7 @@ exports.getAllServices = async (req, res) => {
 // Get single service by ID
 exports.getServiceById = async (req, res) => {
   try {
-    const service = await Service.findOne({ serviceId: req.params.id });
+    const service = await Service.findById(req.params.id);
     
     if (!service) {
       return res.status(404).json({
@@ -47,7 +47,6 @@ exports.getServiceById = async (req, res) => {
 exports.createService = async (req, res) => {
   try {
     const {
-      serviceId,
       title,
       category,
       description,
@@ -63,24 +62,14 @@ exports.createService = async (req, res) => {
     } = req.body;
 
     // Validate required fields
-    if (!serviceId || !title || !category || !description || !aboutService || !price || !duration || !consultant || !consultantTitle) {
+    if (!title || !category || !description || !aboutService || !price || !duration || !consultant || !consultantTitle) {
       return res.status(400).json({
         success: false,
         error: 'Please provide all required fields'
       });
     }
 
-    // Check if service with this ID already exists
-    const existingService = await Service.findOne({ serviceId });
-    if (existingService) {
-      return res.status(400).json({
-        success: false,
-        error: 'Service with this ID already exists'
-      });
-    }
-
     const service = await Service.create({
-      serviceId,
       title,
       category,
       description,
@@ -112,14 +101,10 @@ exports.createService = async (req, res) => {
 // Update service
 exports.updateService = async (req, res) => {
   try {
-    const serviceId = req.params.id;
     const updateData = req.body;
 
-    // Don't allow changing the serviceId
-    delete updateData.serviceId;
-
-    const service = await Service.findOneAndUpdate(
-      { serviceId },
+    const service = await Service.findByIdAndUpdate(
+      req.params.id,
       updateData,
       { new: true, runValidators: true }
     );
@@ -148,9 +133,7 @@ exports.updateService = async (req, res) => {
 // Delete service
 exports.deleteService = async (req, res) => {
   try {
-    const serviceId = req.params.id;
-
-    const service = await Service.findOneAndDelete({ serviceId });
+    const service = await Service.findByIdAndDelete(req.params.id);
 
     if (!service) {
       return res.status(404).json({
@@ -173,18 +156,14 @@ exports.deleteService = async (req, res) => {
   }
 };
 
-// Get next available service ID
+// Get next available service ID (no longer needed with MongoDB _id)
 exports.getNextServiceId = async (req, res) => {
   try {
-    const lastService = await Service.findOne().sort({ serviceId: -1 });
-    const nextId = lastService ? lastService.serviceId + 1 : 1;
-    
     res.json({
       success: true,
-      nextServiceId: nextId
+      message: 'MongoDB auto-generates IDs'
     });
   } catch (error) {
-    console.error('Error getting next service ID:', error);
     res.status(500).json({
       success: false,
       error: 'Failed to get next service ID'

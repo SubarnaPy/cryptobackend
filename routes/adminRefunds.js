@@ -152,18 +152,21 @@ router.put('/:id/status', async (req, res) => {
       try {
         // Get payment intent ID from the payment
         const paymentIntentId = refund.paymentId.stripePaymentIntentId;
+        
         if (!paymentIntentId) {
-          throw new Error('No payment intent ID found');
+          console.log('No Stripe payment intent ID - marking as succeeded without Stripe refund');
+          refund.status = 'succeeded';
+          refund.refundProcessedAt = new Date();
+        } else {
+          // Create Stripe refund
+          const stripeRefund = await createRefund(refund, paymentIntentId);
+
+          // Update refund with Stripe ID
+          refund.stripeRefundId = stripeRefund.id;
+          refund.status = 'processing'; // Will be updated by webhook later
+
+          console.log(`Stripe refund created: ${stripeRefund.id}`);
         }
-
-        // Create Stripe refund
-        const stripeRefund = await createRefund(refund, paymentIntentId);
-
-        // Update refund with Stripe ID
-        refund.stripeRefundId = stripeRefund.id;
-        refund.status = 'processing'; // Will be updated by webhook later
-
-        console.log(`Stripe refund created: ${stripeRefund.id}`);
       } catch (stripeError) {
         console.error('Stripe refund error:', stripeError);
         return res.status(500).json({
@@ -180,8 +183,8 @@ router.put('/:id/status', async (req, res) => {
     }
 
     // Update payment status if refund succeeded
-    if (status === 'succeeded' && refund.paymentId) {
-      const payment = await Payment.findById(refund.paymentId);
+    if ((status === 'succeeded' || (status === 'approved' && !refund.paymentId?.stripePaymentIntentId)) && refund.paymentId) {
+      const payment = await Payment.findById(refund.paymentId._id || refund.paymentId);
       if (payment) {
         payment.status = 'refunded';
         await payment.save();

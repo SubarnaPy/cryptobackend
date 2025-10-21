@@ -32,6 +32,8 @@ router.post('/request', verifyToken, async (req, res) => {
   try {
     const { paymentId, refundReason } = req.body;
 
+    console.log('Refund request received:', { paymentId, refundReason, userId: req.user._id });
+
     // Validate required fields
     if (!paymentId || !refundReason) {
       return res.status(400).json({
@@ -40,12 +42,20 @@ router.post('/request', verifyToken, async (req, res) => {
       });
     }
 
+    // Validate ObjectId format
+    if (!require('mongoose').Types.ObjectId.isValid(paymentId)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid payment ID format',
+      });
+    }
+
     // Find the payment using MongoDB _id
     console.log('Searching for payment:', { paymentId, userId: req.user._id });
     
     const payment = await Payment.findOne({
       _id: paymentId,
-      userId: req.user._id, // Changed from req.user.userId to req.user._id
+      userId: req.user._id,
       status: { $in: ['succeeded', 'processing'] },
     });
 
@@ -55,7 +65,8 @@ router.post('/request', verifyToken, async (req, res) => {
         id: payment._id,
         userId: payment.userId,
         status: payment.status,
-        amount: payment.amount
+        amount: payment.amount,
+        serviceId: payment.serviceId
       });
     }
 
@@ -82,11 +93,11 @@ router.post('/request', verifyToken, async (req, res) => {
     // Create refund request
     const refund = new Refund({
       paymentId: payment._id,
-      userId: req.user._id, // Changed from req.user.userId to req.user._id
-      serviceId: payment.serviceId,
+      userId: req.user._id,
+      serviceId: payment.serviceId || null,
       refundReason: refundReason.trim(),
       refundAmount: payment.amount,
-      currency: payment.currency,
+      currency: payment.currency || 'usd',
       serviceDetails: {
         title: payment.serviceDetails?.title || 'Service',
         consultant: payment.serviceDetails?.consultant || 'N/A',
@@ -94,7 +105,9 @@ router.post('/request', verifyToken, async (req, res) => {
       },
     });
 
+    console.log('Creating refund:', refund);
     await refund.save();
+    console.log('Refund saved successfully:', refund._id);
 
     res.status(201).json({
       success: true,
@@ -103,6 +116,7 @@ router.post('/request', verifyToken, async (req, res) => {
     });
   } catch (error) {
     console.error('Error creating refund request:', error);
+    console.error('Error stack:', error.stack);
     res.status(500).json({
       success: false,
       message: 'Failed to create refund request',

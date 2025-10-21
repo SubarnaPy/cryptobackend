@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const Payment = require('../../models/Payment');
 const Refund = require('../../models/Refund');
+const Purchase = require('../../models/Purchase');
 const { validateWebhook } = require('../../services/stripeService');
 
 // Stripe webhook endpoint - raw body parsing is handled globally in your server.js
@@ -183,6 +184,42 @@ async function handleCheckoutSessionCompleted(session) {
 
     await payment.save();
     console.log(`✅ Successfully updated payment ${payment._id}`);
+
+    // Create Purchase records for cart items
+    if (session.payment_status === 'paid' && payment.serviceDetails?.items) {
+      console.log('Creating purchase records for cart items...');
+      const Purchase = require('../../models/Purchase');
+      const Product = require('../../models/Product');
+      const mongoose = require('mongoose');
+      
+      for (const item of payment.serviceDetails.items) {
+        const existingPurchase = await Purchase.findOne({
+          userId: payment.userId,
+          itemId: new mongoose.Types.ObjectId(item.itemId),
+          itemType: item.itemType
+        });
+
+        if (!existingPurchase) {
+          await Purchase.create({
+            userId: payment.userId,
+            itemType: item.itemType,
+            itemId: new mongoose.Types.ObjectId(item.itemId),
+            paymentId: payment._id,
+            price: item.price || 0,
+            quantity: item.quantity || 1
+          });
+          console.log(`✅ Created purchase record for ${item.itemType}: ${item.itemId}`);
+          
+          // Increment sales count for products
+          if (item.itemType === 'product') {
+            await Product.findByIdAndUpdate(item.itemId, {
+              $inc: { salesCount: item.quantity || 1 }
+            });
+            console.log(`✅ Incremented sales count for product: ${item.itemId}`);
+          }
+        }
+      }
+    }
   } catch (error) {
     console.error('❌ Error in handleCheckoutSessionCompleted:', error);
     throw error;

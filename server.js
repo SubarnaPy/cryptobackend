@@ -16,6 +16,7 @@ app.use(cors({
     'http://localhost:8081', 
     'http://localhost:8080',
     'https://thunderous-daifuku-d8654f.netlify.app',
+    
     'https://gleaming-raindrop-809582.netlify.app',
     'https://kyptronix-canadian-nexus.netlify.app',
     'https://kyptronix-canada-nexus.netlify.app',
@@ -93,6 +94,10 @@ app.use('/api/admin/users', require('./routes/adminUsers'));
 app.use('/api/payments', require('./routes/payments'));
 app.use('/api/refunds', require('./routes/refunds'));
 app.use('/api/consultations', require('./routes/consultations'));
+app.use('/api/webinars', require('./routes/webinars'));
+app.use('/api/products', require('./routes/products'));
+app.use('/api/cart', require('./routes/cart'));
+app.use('/api/user', require('./routes/userProducts'));
 
 // Stripe webhook routes - support both URL formats for compatibility
 const stripeWebhookHandler = require('./routes/webhooks/stripe');
