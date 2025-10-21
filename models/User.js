@@ -13,8 +13,9 @@ const userSchema = new mongoose.Schema({
   },
   email: {
     type: String,
-    required: true,
+    required: false,
     unique: true,
+    sparse: true,
     lowercase: true,
     trim: true,
   },
@@ -89,8 +90,11 @@ userSchema.methods.generateAffiliateCode = async function() {
   return code;
 };
 
-// Update the updatedAt timestamp before saving
+// Validation: Either email or phone must be provided
 userSchema.pre('save', function(next) {
+  if (!this.email && !this.phone) {
+    return next(new Error('Either email or phone number is required'));
+  }
   this.updatedAt = Date.now();
   next();
 });

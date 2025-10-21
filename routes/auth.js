@@ -3,9 +3,222 @@ const router = express.Router();
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const User = require('../models/User');
+const sgMail = require('@sendgrid/mail');
+const twilio = require('twilio');
 
 // JWT Secret
 const JWT_SECRET = process.env.JWT_SECRET || 'your-secret-key-change-in-production';
+
+// In-memory OTP storage (use Redis in production)
+const otpStore = new Map();
+
+// Configure SendGrid
+sgMail.setApiKey(process.env.SENDGRID_API_KEY);
+
+// Configure Twilio
+const twilioClient = twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN);
+
+// Generate OTP
+function generateOTP() {
+  return Math.floor(100000 + Math.random() * 900000).toString();
+}
+
+// Send OTP via email
+async function sendOTPEmail(email, otp) {
+  try {
+    // For development: Log OTP to console
+    console.log(`🔑 DEVELOPMENT OTP for ${email}: ${otp}`);
+    console.log('📧 In production, this would be sent via SendGrid');
+
+    // Uncomment below for production email sending
+    /*
+    const msg = {
+      to: email,
+      from: process.env.SENDGRID_FROM_EMAIL,
+      subject: 'Your OTP for Canadian Nexus',
+      html: `
+        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+          <h2 style="color: #F0B90B;">Welcome to Canadian Nexus!</h2>
+          <p>Your OTP code is:</p>
+          <div style="background: #f5f5f5; padding: 20px; text-align: center; font-size: 24px; font-weight: bold; color: #333; margin: 20px 0;">
+            ${otp}
+          </div>
+          <p>This code will expire in 10 minutes.</p>
+          <p>If you didn't request this, please ignore this email.</p>
+        </div>
+      `,
+    };
+
+    await sgMail.send(msg);
+    */
+  } catch (error) {
+    console.error('❌ Email sending error:', error);
+    // Don't throw error in development - just log it
+  }
+}
+
+// Send OTP via SMS
+async function sendOTPSMS(phone, otp) {
+  await twilioClient.messages.create({
+    body: `Your Canadian Nexus OTP: ${otp}. Valid for 10 minutes.`,
+    from: process.env.TWILIO_PHONE_NUMBER,
+    to: phone
+  });
+}
+
+// Send OTP Route
+router.post('/send-otp', async (req, res) => {
+  try {
+    const { contact } = req.body; // email or phone
+    
+    if (!contact) {
+      return res.status(400).json({ error: 'Email or phone number is required' });
+    }
+    
+    // Check if user already exists
+    const existingUser = await User.findOne({
+      $or: [{ email: contact }, { phone: contact }]
+    });
+
+    const otp = generateOTP();
+    const expiresAt = Date.now() + 10 * 60 * 1000; // 10 minutes
+
+    // Store OTP with user info
+    otpStore.set(contact, {
+      otp,
+      expiresAt,
+      isExistingUser: !!existingUser,
+      userId: existingUser?._id
+    });
+
+    // Send OTP via email or SMS
+    if (contact.includes('@')) {
+      await sendOTPEmail(contact, otp);
+    } else {
+      await sendOTPSMS(contact, otp);
+    }
+
+    res.json({
+      message: existingUser ? 'OTP sent for login' : 'OTP sent for registration',
+      isExistingUser: !!existingUser
+    });
+  } catch (error) {
+    console.error('Send OTP error:', error);
+    res.status(500).json({ error: 'Failed to send OTP' });
+  }
+});
+
+// Verify OTP and Create User/Login Route
+router.post('/verify-otp', async (req, res) => {
+  try {
+    const { contact, otp } = req.body;
+
+    if (!contact || !otp) {
+      return res.status(400).json({ error: 'Contact and OTP are required' });
+    }
+
+    // Check OTP
+    const storedOTP = otpStore.get(contact);
+    if (!storedOTP) {
+      return res.status(400).json({ error: 'OTP not found or expired' });
+    }
+
+    if (Date.now() > storedOTP.expiresAt) {
+      otpStore.delete(contact);
+      return res.status(400).json({ error: 'OTP expired' });
+    }
+
+    if (storedOTP.otp !== otp) {
+      return res.status(400).json({ error: 'Invalid OTP' });
+    }
+
+    // Clean up OTP
+    otpStore.delete(contact);
+
+    // Check if this is for an existing user
+    if (storedOTP.isExistingUser && storedOTP.userId) {
+      // Existing user login
+      const user = await User.findById(storedOTP.userId);
+      if (!user) {
+        return res.status(400).json({ error: 'User not found' });
+      }
+
+      // Generate JWT token
+      const token = jwt.sign(
+        { userId: user._id, email: user.email, role: user.role },
+        JWT_SECRET,
+        { expiresIn: '7d' }
+      );
+
+      return res.json({
+        message: 'Login successful',
+        token,
+        user: {
+          id: user._id,
+          email: user.email,
+          firstName: user.firstName,
+          lastName: user.lastName,
+          phone: user.phone,
+          role: user.role,
+          needsProfileUpdate: false,
+        },
+      });
+    }
+
+    // New user registration
+    // Create user with dummy password
+    const dummyPassword = 'User123';
+    const salt = await bcrypt.genSalt(10);
+    const hashedPassword = await bcrypt.hash(dummyPassword, salt);
+
+    const userCount = await User.countDocuments();
+    const role = userCount === 0 ? 'admin' : 'user';
+
+    const userData = {
+      password: hashedPassword,
+      role,
+      firstName: 'User',
+      lastName: 'Name',
+    };
+
+    // Set email or phone
+    if (contact.includes('@')) {
+      userData.email = contact;
+    } else {
+      userData.phone = contact;
+    }
+
+    const user = new User(userData);
+    const affiliateCode = await user.generateAffiliateCode();
+    user.affiliateCode = affiliateCode;
+
+    await user.save();
+
+    // Generate JWT token
+    const token = jwt.sign(
+      { userId: user._id, email: user.email, role: user.role },
+      JWT_SECRET,
+      { expiresIn: '7d' }
+    );
+
+    res.status(201).json({
+      message: 'Account created successfully',
+      token,
+      user: {
+        id: user._id,
+        email: user.email,
+        firstName: user.firstName,
+        lastName: user.lastName,
+        phone: user.phone,
+        role: user.role,
+        needsProfileUpdate: true,
+      },
+    });
+  } catch (error) {
+    console.error('Verify OTP error:', error);
+    res.status(500).json({ error: 'Failed to verify OTP' });
+  }
+});
 
 // Signup Route
 router.post('/signup', async (req, res) => {
@@ -167,6 +380,68 @@ router.post('/login', async (req, res) => {
     res.status(500).json({ 
       error: 'Failed to login. Please try again.' 
     });
+  }
+});
+
+// Update user profile
+router.put('/update-profile', async (req, res) => {
+  try {
+    const token = req.headers.authorization?.replace('Bearer ', '');
+    
+    if (!token) {
+      return res.status(401).json({ error: 'No token provided' });
+    }
+
+    const decoded = jwt.verify(token, JWT_SECRET);
+    const user = await User.findById(decoded.userId);
+
+    if (!user) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    const { firstName, lastName, email, phone, password } = req.body;
+
+    // Check email uniqueness if updating email
+    if (email && email !== user.email) {
+      const existingUser = await User.findOne({ email, _id: { $ne: user._id } });
+      if (existingUser) {
+        return res.status(400).json({ error: 'Email already exists' });
+      }
+    }
+
+    // Update fields
+    if (firstName) user.firstName = firstName;
+    if (lastName) user.lastName = lastName;
+    if (email) user.email = email;
+    if (phone) user.phone = phone;
+    
+    // Update password if provided
+    if (password) {
+      const salt = await bcrypt.genSalt(10);
+      user.password = await bcrypt.hash(password, salt);
+    }
+
+    // Clear profile update flag if profile is now complete
+    if (firstName && lastName && (email || phone)) {
+      user.needsProfileUpdate = false;
+    }
+
+    await user.save();
+
+    res.json({
+      message: 'Profile updated successfully',
+      user: {
+        id: user._id,
+        email: user.email,
+        firstName: user.firstName,
+        lastName: user.lastName,
+        phone: user.phone,
+        role: user.role,
+      },
+    });
+  } catch (error) {
+    console.error('Update profile error:', error);
+    res.status(500).json({ error: 'Failed to update profile' });
   }
 });
 

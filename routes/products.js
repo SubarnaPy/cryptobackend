@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const Product = require('../models/Product');
 const { requireAdmin } = require('../middleware/auth');
+const { upload } = require('../services/cloudinaryService');
 
 // @route   GET /api/products
 // @desc    Get all active products
@@ -54,9 +55,17 @@ router.get('/admin/all', requireAdmin, async (req, res) => {
 // @route   POST /api/products/admin
 // @desc    Create a product (admin)
 // @access  Private Admin
-router.post('/admin', requireAdmin, async (req, res) => {
+router.post('/admin', requireAdmin, upload.single('image'), async (req, res) => {
   try {
-    const product = new Product(req.body);
+    const productData = req.body;
+    
+    // Add image URL if uploaded
+    if (req.file) {
+      productData.coverImage = req.file.path;
+      productData.thumbnail = req.file.path;
+    }
+    
+    const product = new Product(productData);
     await product.save();
     res.status(201).json({ success: true, data: product });
   } catch (error) {
@@ -68,11 +77,19 @@ router.post('/admin', requireAdmin, async (req, res) => {
 // @route   PUT /api/products/admin/:id
 // @desc    Update a product (admin)
 // @access  Private Admin
-router.put('/admin/:id', requireAdmin, async (req, res) => {
+router.put('/admin/:id', requireAdmin, upload.single('image'), async (req, res) => {
   try {
+    const updateData = req.body;
+    
+    // Add image URL if uploaded
+    if (req.file) {
+      updateData.coverImage = req.file.path;
+      updateData.thumbnail = req.file.path;
+    }
+    
     const product = await Product.findByIdAndUpdate(
       req.params.id,
-      { $set: req.body },
+      { $set: updateData },
       { new: true, runValidators: true }
     );
 
