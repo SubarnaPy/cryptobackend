@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const adminServiceController = require('../controllers/adminServiceController');
+const adminServiceController = require('../controllers/admin/serviceController');
 
 // Get next available service ID
 router.get('/next-id', adminServiceController.getNextServiceId);

@@ -88,6 +88,7 @@ mongoose.connect(process.env.MONGODB_URI || 'mongodb+srv://mondalsubarna29:Su123
 app.use('/api/auth', require('./routes/auth'));
 app.use('/api/services', require('./routes/services'));
 app.use('/api/admin/services', require('./routes/adminServices'));
+app.use('/api/admin/analytics', require('./routes/adminAnalytics'));
 app.use('/api/admin/payments', require('./routes/adminPayments'));
 app.use('/api/admin/refunds', require('./routes/adminRefunds'));
 app.use('/api/admin/users', require('./routes/adminUsers'));

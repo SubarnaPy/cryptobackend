@@ -185,37 +185,76 @@ async function handleCheckoutSessionCompleted(session) {
     await payment.save();
     console.log(`✅ Successfully updated payment ${payment._id}`);
 
-    // Create Purchase records for cart items
-    if (session.payment_status === 'paid' && payment.serviceDetails?.items) {
-      console.log('Creating purchase records for cart items...');
+    // Create Purchase records for cart items or direct service purchases
+    if (session.payment_status === 'paid') {
       const Purchase = require('../../models/Purchase');
       const Product = require('../../models/Product');
+      const Service = require('../../models/Service');
       const mongoose = require('mongoose');
-      
-      for (const item of payment.serviceDetails.items) {
+
+      // Handle cart purchases (multiple items)
+      if (payment.serviceDetails?.items) {
+        console.log('Creating purchase records for cart items...');
+        for (const item of payment.serviceDetails.items) {
+          const existingPurchase = await Purchase.findOne({
+            userId: payment.userId,
+            itemId: new mongoose.Types.ObjectId(item.itemId),
+            itemType: item.itemType
+          });
+
+          if (!existingPurchase) {
+            await Purchase.create({
+              userId: payment.userId,
+              itemType: item.itemType,
+              itemId: new mongoose.Types.ObjectId(item.itemId),
+              paymentId: payment._id,
+              price: item.price || 0,
+              quantity: item.quantity || 1
+            });
+            console.log(`✅ Created purchase record for ${item.itemType}: ${item.itemId}`);
+
+            // Increment sales count for products
+            if (item.itemType === 'product') {
+              await Product.findByIdAndUpdate(item.itemId, {
+                $inc: { salesCount: item.quantity || 1 }
+              });
+              console.log(`✅ Incremented sales count for product: ${item.itemId}`);
+            }
+          }
+        }
+      }
+      // Handle direct service purchases (single service)
+      else if (payment.serviceId) {
+        console.log('Creating purchase record for direct service purchase...');
         const existingPurchase = await Purchase.findOne({
           userId: payment.userId,
-          itemId: new mongoose.Types.ObjectId(item.itemId),
-          itemType: item.itemType
+          itemId: new mongoose.Types.ObjectId(payment.serviceId),
+          itemType: 'service'
         });
 
         if (!existingPurchase) {
+          // Calculate price in cents (same logic as in payment controller)
+          const servicePrice = payment.serviceDetails?.price || '$0';
+          const priceInCents = Math.round(parseFloat(servicePrice.replace(/[$,]/g, '')) * 100);
+
           await Purchase.create({
             userId: payment.userId,
-            itemType: item.itemType,
-            itemId: new mongoose.Types.ObjectId(item.itemId),
+            itemType: 'service',
+            itemId: new mongoose.Types.ObjectId(payment.serviceId),
             paymentId: payment._id,
-            price: item.price || 0,
-            quantity: item.quantity || 1
+            price: priceInCents,
+            quantity: 1
           });
-          console.log(`✅ Created purchase record for ${item.itemType}: ${item.itemId}`);
-          
-          // Increment sales count for products
-          if (item.itemType === 'product') {
-            await Product.findByIdAndUpdate(item.itemId, {
-              $inc: { salesCount: item.quantity || 1 }
+          console.log(`✅ Created purchase record for service: ${payment.serviceId}`);
+
+          // Increment sales count for services (if the Service model has this field)
+          try {
+            await Service.findByIdAndUpdate(payment.serviceId, {
+              $inc: { salesCount: 1 }
             });
-            console.log(`✅ Incremented sales count for product: ${item.itemId}`);
+            console.log(`✅ Incremented sales count for service: ${payment.serviceId}`);
+          } catch (error) {
+            console.log(`⚠️ Could not increment sales count for service (field may not exist): ${payment.serviceId}`);
           }
         }
       }
