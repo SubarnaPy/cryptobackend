@@ -267,26 +267,45 @@ async function handleCheckoutSessionCompleted(session) {
 
 async function handleChargeRefunded(charge) {
   try {
-    console.log(`Processing charge.refunded: ${charge.id}`);
-    const refund = await Refund.findOne({
-      stripeRefundId: { $exists: true },
-      status: 'processing'
-    }).sort({ createdAt: -1 });
+    console.log(`💸 Processing charge.refunded: ${charge.id}`);
+    console.log(`🔗 Payment Intent: ${charge.payment_intent}`);
 
-    if (!refund) {
-      console.warn(`No processing refund found for charge refund: ${charge.id}`);
+    // Find the payment using the payment intent ID from the charge
+    const payment = await Payment.findOne({ stripePaymentIntentId: charge.payment_intent });
+
+    if (!payment) {
+      console.warn(`⚠️ No payment found for payment intent: ${charge.payment_intent}`);
       return;
     }
-    refund.status = 'succeeded';
-    await refund.save();
-    const payment = await Payment.findById(refund.paymentId);
-    if (payment && payment.status !== 'refunded') {
+
+    // Update payment status to refunded
+    if (payment.status !== 'refunded') {
       payment.status = 'refunded';
+      payment.updatedAt = new Date();
       await payment.save();
+      console.log(`💰 Updated payment ${payment._id} to refunded status`);
     }
-    console.log(`Updated refund ${refund._id} to succeeded status`);
+
+    // Find and update the associated refund using payment relationship
+    const refund = await Refund.findOne({
+      paymentId: payment._id,
+      status: 'processing',
+      stripeRefundId: { $exists: true, $ne: null }
+    });
+
+    if (!refund) {
+      console.warn(`⚠️ No processing refund found for payment ${payment._id}`);
+      return;
+    }
+
+    // Update refund status to succeeded
+    refund.status = 'succeeded';
+    refund.refundProcessedAt = new Date();
+    await refund.save();
+
+    console.log(`🔄 Updated refund ${refund._id} to succeeded status`);
   } catch (error) {
-    console.error('Error handling charge.refunded:', error);
+    console.error('❌ Error handling charge.refunded:', error);
     throw error;
   }
 }

@@ -1,47 +1,13 @@
-class StripeWebhookController {
-    constructor() {
-        // Initialize any necessary properties or dependencies
-    }
-
-    handleWebhook(req, res) {
-        const event = req.body;
-
-        // Handle the event based on its type
-        switch (event.type) {
-            case 'payment_intent.succeeded':
-                this.handlePaymentIntentSucceeded(event);
-                break;
-            case 'payment_intent.payment_failed':
-                this.handlePaymentIntentFailed(event);
-                break;
-            // Add more cases as needed for other event types
-            default:
-                console.log(`Unhandled event type ${event.type}`);
-        }
-
-        // Respond with a 200 status to acknowledge receipt of the event
-        res.status(200).send('Webhook received');
-    }
-
-    handlePaymentIntentSucceeded(event) {
-        const paymentIntent = event.data.object;
-        // Handle successful payment intent (e.g., update database, send confirmation)
-        console.log(`PaymentIntent was successful! ID: ${paymentIntent.id}`);
-    }
-
-    handlePaymentIntentFailed(event) {
-        const paymentIntent = event.data.object;
-        // Handle failed payment intent (e.g., notify user, log error)
-        console.log(`PaymentIntent failed! ID: ${paymentIntent.id}`);
-    }
-}
-
+const { validateWebhook } = require('../services/stripeService');
+const Payment = require('../models/Payment');
+const Purchase = require('../models/Purchase');
+const Refund = require('../models/Refund');
 
 exports.handleStripeWebhook = async (req, res) => {
   let event;
 
   try {
-    // 1️⃣ Validate and construct the event using your helper
+    // Validate and construct the event using Stripe's webhook validation
     event = validateWebhook(req);
 
     if (event === true) {
@@ -58,6 +24,8 @@ exports.handleStripeWebhook = async (req, res) => {
   const data = event.data.object;
 
   console.log(`⚡ Stripe Webhook Event Received: ${eventType}`);
+  console.log(`📋 Event ID: ${event.id || 'N/A'}`);
+  console.log(`🎯 Data Object ID: ${data?.id || 'N/A'}`);
 
   try {
     switch (eventType) {
@@ -67,34 +35,37 @@ exports.handleStripeWebhook = async (req, res) => {
 
         console.log('✅ Checkout session completed:', sessionId);
 
-        const Payment = require('../models/Payment');
-        const Purchase = require('../models/Purchase');
-        
         const payment = await Payment.findOne({ stripeCheckoutSessionId: sessionId });
         if (!payment) {
-          console.warn(`No payment found for checkout session: ${sessionId}`);
+          console.warn(`⚠️ No payment found for checkout session: ${sessionId}`);
           return res.status(200).json({ received: true });
         }
 
+        // Update payment with payment intent ID and mark as succeeded
         payment.stripePaymentIntentId = paymentIntentId;
-        payment.status = 'completed';
+        payment.status = 'succeeded'; // Consistent with other parts of the codebase
         payment.updatedAt = new Date();
         await payment.save();
-        console.log(`Updated payment ${payment._id} to completed status`);
+        console.log(`💰 Updated payment ${payment._id} to succeeded status`);
 
         // Create Purchase records for cart items
         if (payment.serviceDetails?.items) {
           for (const item of payment.serviceDetails.items) {
-            const purchase = new Purchase({
-              userId: payment.userId,
-              itemType: item.itemType,
-              itemId: item.itemId,
-              paymentId: payment._id,
-              price: item.price || 0,
-              quantity: item.quantity || 1
-            });
-            await purchase.save();
-            console.log(`Created purchase record for ${item.itemType} ${item.itemId}`);
+            try {
+              const purchase = new Purchase({
+                userId: payment.userId,
+                itemType: item.itemType,
+                itemId: item.itemId,
+                paymentId: payment._id,
+                price: item.price || 0,
+                quantity: item.quantity || 1
+              });
+              await purchase.save();
+              console.log(`🛒 Created purchase record for ${item.itemType} ${item.itemId}`);
+            } catch (purchaseError) {
+              console.error(`❌ Error creating purchase record:`, purchaseError);
+              // Continue processing other items even if one fails
+            }
           }
         }
         break;
@@ -107,16 +78,17 @@ exports.handleStripeWebhook = async (req, res) => {
 
         const payment = await Payment.findOne({ stripePaymentIntentId: paymentIntentId });
         if (!payment) {
-          console.warn(`No payment found for payment intent: ${paymentIntentId}`);
+          console.warn(`⚠️ No payment found for payment intent: ${paymentIntentId}`);
           return res.status(200).json({ received: true });
         }
 
-        payment.status = 'paid';
+        // Update payment status and amount received
+        payment.status = 'succeeded'; // Consistent status
         payment.amountReceived = data.amount_received;
         payment.updatedAt = new Date();
 
         await payment.save();
-        console.log(`Updated payment ${payment._id} to paid status`);
+        console.log(`💰 Updated payment ${payment._id} to succeeded status`);
         break;
       }
 
@@ -126,42 +98,47 @@ exports.handleStripeWebhook = async (req, res) => {
 
         console.log('💸 Charge refunded:', chargeId);
 
-        // Update payment status
+        // Find and update payment status
         const payment = await Payment.findOne({ stripePaymentIntentId: paymentIntentId });
         if (payment) {
           payment.status = 'refunded';
           payment.updatedAt = new Date();
           await payment.save();
-          console.log(`Updated payment ${payment._id} to refunded status`);
+          console.log(`💰 Updated payment ${payment._id} to refunded status`);
+        } else {
+          console.warn(`⚠️ No payment found for payment intent: ${paymentIntentId}`);
         }
 
-        // Update refund status - find refund by stripeRefundId from the charge's refunds
-        const Refund = require('../models/Refund');
-        if (data.refunds && data.refunds.length > 0) {
-          for (const refundData of data.refunds) {
-            const refund = await Refund.findOne({ stripeRefundId: refundData.id });
-            if (refund && refund.status === 'processing') {
-              refund.status = 'succeeded';
-              refund.refundProcessedAt = new Date();
-              await refund.save();
-              console.log(`Updated refund ${refund._id} to succeeded status`);
-            }
+        // Find and update refund status - use payment relationship for reliable matching
+        if (payment) {
+          const refund = await Refund.findOne({
+            paymentId: payment._id,
+            status: 'processing',
+            stripeRefundId: { $exists: true, $ne: null }
+          });
+
+          if (refund) {
+            refund.status = 'succeeded';
+            refund.refundProcessedAt = new Date();
+            await refund.save();
+            console.log(`🔄 Updated refund ${refund._id} to succeeded status`);
+          } else {
+            console.log(`ℹ️ No processing refund found for payment ${payment._id}`);
           }
         }
         break;
       }
 
       default:
-        console.log(`Unhandled event type: ${eventType}`);
+        console.log(`⚠️ Unhandled event type: ${eventType}`);
     }
 
     // Respond to Stripe to confirm receipt
     res.json({ received: true });
   } catch (err) {
     console.error('❌ Error processing webhook event:', err.message);
-    res.status(500).json({ error: err.message });
+    console.error('📋 Event type:', eventType);
+    console.error('📋 Error stack:', err.stack);
+    res.status(500).json({ error: 'Internal server error processing webhook' });
   }
 };
-
-
-module.exports = StripeWebhookController;
