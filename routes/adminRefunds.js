@@ -4,7 +4,8 @@ const {
   getAllRefunds,
   getRefundStats,
   getRefundById,
-  updateRefundStatus
+  updateRefundStatus,
+  checkRefundStatus
 } = require('../controllers/admin/refundController');
 
 const router = express.Router();
@@ -23,6 +24,9 @@ router.get('/:id', getRefundById);
 
 // Update refund status
 router.put('/:id/status', updateRefundStatus);
+
+// Check refund status from Stripe
+router.get('/:id/check-status', checkRefundStatus);
 
 
 

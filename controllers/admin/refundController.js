@@ -129,8 +129,9 @@ const updateRefundStatus = async (req, res) => {
       return res.status(404).json({ success: false, error: 'Refund not found' });
     }
 
-    if (refund.status !== 'pending') {
-      return res.status(400).json({ success: false, error: 'Refund is not in pending status' });
+    // Allow updating processing refunds to succeeded/failed for manual resolution
+    if (refund.status !== 'pending' && !(refund.status === 'processing' && ['succeeded', 'failed'].includes(status))) {
+      return res.status(400).json({ success: false, error: 'Refund is not in pending or processing status' });
     }
 
     // Update refund
@@ -257,9 +258,63 @@ const updateRefundStatus = async (req, res) => {
   }
 };
 
+// Check and update refund status from Stripe
+const checkRefundStatus = async (req, res) => {
+  try {
+    const refund = await Refund.findById(req.params.id);
+
+    if (!refund) {
+      return res.status(404).json({ success: false, error: 'Refund not found' });
+    }
+
+    if (!refund.stripeRefundId) {
+      return res.status(400).json({ success: false, error: 'No Stripe refund ID found' });
+    }
+
+    const { getRefundDetails } = require('../../services/stripeService');
+    const stripeRefund = await getRefundDetails(refund.stripeRefundId);
+
+    let newStatus = refund.status;
+    if (stripeRefund.status === 'succeeded' && refund.status === 'processing') {
+      newStatus = 'succeeded';
+      refund.refundProcessedAt = new Date();
+    } else if (stripeRefund.status === 'failed' && refund.status === 'processing') {
+      newStatus = 'failed';
+    }
+
+    if (newStatus !== refund.status) {
+      refund.status = newStatus;
+      await refund.save();
+
+      // Update payment status if refund succeeded
+      if (newStatus === 'succeeded' && refund.paymentId) {
+        const payment = await Payment.findById(refund.paymentId);
+        if (payment) {
+          payment.status = 'refunded';
+          await payment.save();
+        }
+      }
+    }
+
+    res.json({
+      success: true,
+      data: {
+        refund,
+        stripeStatus: stripeRefund.status,
+        updated: newStatus !== refund.status
+      },
+      message: `Refund status checked. Stripe status: ${stripeRefund.status}`
+    });
+  } catch (error) {
+    console.error('Error checking refund status:', error);
+    res.status(500).json({ success: false, error: 'Failed to check refund status' });
+  }
+};
+
 module.exports = {
   getAllRefunds,
   getRefundStats,
   getRefundById,
-  updateRefundStatus
+  updateRefundStatus,
+  checkRefundStatus
 };

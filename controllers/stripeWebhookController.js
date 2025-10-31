@@ -121,21 +121,33 @@ exports.handleStripeWebhook = async (req, res) => {
       }
 
       case 'charge.refunded': {
+        const chargeId = data.id;
         const paymentIntentId = data.payment_intent;
 
-        console.log('💸 Charge refunded:', paymentIntentId);
+        console.log('💸 Charge refunded:', chargeId);
 
+        // Update payment status
         const payment = await Payment.findOne({ stripePaymentIntentId: paymentIntentId });
-        if (!payment) {
-          console.warn(`No payment found for payment intent: ${paymentIntentId}`);
-          return res.status(200).json({ received: true });
+        if (payment) {
+          payment.status = 'refunded';
+          payment.updatedAt = new Date();
+          await payment.save();
+          console.log(`Updated payment ${payment._id} to refunded status`);
         }
 
-        payment.status = 'refunded';
-        payment.updatedAt = new Date();
-
-        await payment.save();
-        console.log(`Updated payment ${payment._id} to refunded status`);
+        // Update refund status - find refund by stripeRefundId from the charge's refunds
+        const Refund = require('../models/Refund');
+        if (data.refunds && data.refunds.length > 0) {
+          for (const refundData of data.refunds) {
+            const refund = await Refund.findOne({ stripeRefundId: refundData.id });
+            if (refund && refund.status === 'processing') {
+              refund.status = 'succeeded';
+              refund.refundProcessedAt = new Date();
+              await refund.save();
+              console.log(`Updated refund ${refund._id} to succeeded status`);
+            }
+          }
+        }
         break;
       }
 
